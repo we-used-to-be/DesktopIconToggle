@@ -107,8 +107,9 @@ public class DesktopManager : IDisposable
                 return;
             }
 
-            int dragX = NativeMethods.GetSystemMetrics(SM_CXDRAG);
-            int dragY = NativeMethods.GetSystemMetrics(SM_CYDRAG);
+            // SM_CXDRAG/SM_CYDRAG 是矩形总宽高，比较单侧位移时用半宽/半高
+            int dragX = Math.Max(1, NativeMethods.GetSystemMetrics(SM_CXDRAG) / 2);
+            int dragY = Math.Max(1, NativeMethods.GetSystemMetrics(SM_CYDRAG) / 2);
             if (Math.Abs(pt.X - _downPos.X) > dragX || Math.Abs(pt.Y - _downPos.Y) > dragY)
             {
                 // 超过系统拖拽阈值，标记为疑似拖拽/框选。
@@ -134,9 +135,10 @@ public class DesktopManager : IDisposable
 
             // 拖拽判定：Down 点与 Up 点的总位移超过 SM_CXDRAG/SM_CYDRAG
             // 才视为拖拽/框选（框选松开位置必然远离按下点）。
+            // SM_CXDRAG/SM_CYDRAG 是矩形总宽高，比较单侧位移时用半宽/半高；
             // 抖动后回到原位松开不算拖拽。
-            int dragX = NativeMethods.GetSystemMetrics(SM_CXDRAG);
-            int dragY = NativeMethods.GetSystemMetrics(SM_CYDRAG);
+            int dragX = Math.Max(1, NativeMethods.GetSystemMetrics(SM_CXDRAG) / 2);
+            int dragY = Math.Max(1, NativeMethods.GetSystemMetrics(SM_CYDRAG) / 2);
             if (Math.Abs(pt.X - _downPos.X) > dragX || Math.Abs(pt.Y - _downPos.Y) > dragY)
             {
                 // 框选/拖拽结束，清除双击候选，
@@ -149,8 +151,9 @@ public class DesktopManager : IDisposable
             prev = _lastClick;
 
             int doubleClickTime = (int)NativeMethods.GetDoubleClickTime();
-            int doubleClickW = NativeMethods.GetSystemMetrics(SM_CXDOUBLECLK);
-            int doubleClickH = NativeMethods.GetSystemMetrics(SM_CYDOUBLECLK);
+            // SM_CXDOUBLECLK/SM_CYDOUBLECLK 是矩形总宽高，比较单侧位移时用半宽/半高
+            int doubleClickW = Math.Max(1, NativeMethods.GetSystemMetrics(SM_CXDOUBLECLK) / 2);
+            int doubleClickH = Math.Max(1, NativeMethods.GetSystemMetrics(SM_CYDOUBLECLK) / 2);
 
             // 双击判定：与 Windows 一致，两次 Down 的时间差 <= 双击时间，
             // 且两次 Down 位置落在双击矩形内
