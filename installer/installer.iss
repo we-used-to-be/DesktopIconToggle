@@ -44,7 +44,8 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 DisableDirPage=auto
-DisableReadyPage=auto
+; DisableReadyPage only accepts yes/no (unlike DisableDirPage, "auto" is invalid here).
+DisableReadyPage=no
 
 ; The bundled executable is x64 (it also runs on ARM64 Windows via emulation).
 ArchitecturesAllowed=x64compatible
