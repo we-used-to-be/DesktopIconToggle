@@ -426,3 +426,17 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# ---------------------------------------------------------------------------
+# GitHub Actions / Inno Setup build artifacts (produced locally or on runners)
+# The CI checks out fresh, so these are never committed; ignore them so local
+# test runs don't pollute the working tree.
+# ---------------------------------------------------------------------------
+/publish/
+/staging/
+/artifacts/
+/installer/Output/
+.tmp-smoke/
+
+# WorkBuddy project memory / working state (never commit)
+.workbuddy/

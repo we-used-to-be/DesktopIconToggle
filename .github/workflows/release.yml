@@ -1,0 +1,259 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag to build and publish (e.g. v2.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  PROJECT: DesktopIconToggle.csproj
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Resolve the version once so every downstream job agrees on it.
+  # ---------------------------------------------------------------------------
+  meta:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      file_version: ${{ steps.v.outputs.file_version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version from tag
+        id: v
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            raw="$TAG_INPUT"
+          else
+            raw="$GITHUB_REF_NAME"
+          fi
+          version="${raw#v}"
+
+          core=$(printf '%s' "$version" | grep -Eo '^[0-9]+\.[0-9]+\.[0-9]+' || true)
+          if [ -z "$core" ]; then
+            echo "::error::Tag '$raw' is not a valid version tag, expected vX.Y.Z (optionally with a -pre suffix)."
+            exit 1
+          fi
+
+          IFS='.' read -r major minor patch <<< "$core"
+          # FileVersion must be four numeric parts, so a -rc.1 style suffix is dropped.
+          file_version="$major.$minor.$patch.0"
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$raw" >> "$GITHUB_OUTPUT"
+          echo "file_version=$file_version" >> "$GITHUB_OUTPUT"
+          case "$version" in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+          echo "Building $version (tag: $raw, file version: $file_version)"
+
+      - name: Verify csproj version matches the tag
+        run: |
+          csproj_version=$(sed -n 's/.*<Version>\(.*\)<\/Version>.*/\1/p' "$PROJECT" | head -n 1)
+          tag_version="${{ steps.v.outputs.version }}"
+          echo "csproj <Version> = $csproj_version, tag = $tag_version"
+          if [ "$csproj_version" != "$tag_version" ]; then
+            echo "::warning::DesktopIconToggle.csproj declares <Version>$csproj_version</Version> but the tag is $tag_version. Bump the version in the project file before tagging."
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Build the standalone zips: STANDARD (framework-dependent) + PORTABLE (self-contained)
+  # ---------------------------------------------------------------------------
+  build:
+    name: Publish ${{ matrix.arch }}
+    runs-on: windows-latest
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: win-x64
+            arch: x64
+            exe_arch: win_x64
+          - runtime: win-arm64
+            arch: arm64
+            exe_arch: win_arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+          cache: true
+
+      - name: Publish STANDARD (framework-dependent, single file)
+        shell: pwsh
+        run: >
+          dotnet publish "$env:PROJECT"
+          -c Release
+          -r ${{ matrix.runtime }}
+          --self-contained false
+          -p:PublishSingleFile=true
+          -p:Version=${{ needs.meta.outputs.version }}
+          -p:FileVersion=${{ needs.meta.outputs.file_version }}
+          -o "publish/${{ matrix.arch }}/standard"
+
+      - name: Publish PORTABLE (self-contained, single file)
+        shell: pwsh
+        run: >
+          dotnet publish "$env:PROJECT"
+          -c Release
+          -r ${{ matrix.runtime }}
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:PublishTrimmed=false
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:Version=${{ needs.meta.outputs.version }}
+          -p:FileVersion=${{ needs.meta.outputs.file_version }}
+          -o "publish/${{ matrix.arch }}/portable"
+
+      - name: Assemble ${{ matrix.arch }} zip
+        shell: pwsh
+        run: |
+          $staging = "staging/${{ matrix.arch }}"
+          New-Item -ItemType Directory -Force -Path $staging, artifacts | Out-Null
+          Copy-Item "publish/${{ matrix.arch }}/standard/DesktopIconToggle.exe" `
+            "$staging/DesktopIconToggle-${{ matrix.exe_arch }}.exe"
+          Copy-Item "publish/${{ matrix.arch }}/portable/DesktopIconToggle.exe" `
+            "$staging/DesktopIconToggle-${{ matrix.exe_arch }}-Portable.exe"
+          Copy-Item "LICENSE.md", "README.md" $staging
+          Compress-Archive -Path "$staging/*" `
+            -DestinationPath "artifacts/DesktopIconToggle-${{ matrix.arch }}.zip" `
+            -CompressionLevel Optimal
+          Get-ChildItem $staging | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,2)}}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DesktopIconToggle-${{ matrix.arch }}
+          path: artifacts/DesktopIconToggle-${{ matrix.arch }}.zip
+          if-no-files-found: error
+
+      # The installer embeds the x64 self-contained build so users need no runtime.
+      - name: Upload portable executable for the installer
+        if: matrix.arch == 'x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-exe-x64
+          path: publish/x64/portable/DesktopIconToggle.exe
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Build DesktopIconToggle-Setup.exe with Inno Setup
+  # ---------------------------------------------------------------------------
+  installer:
+    name: Build installer
+    runs-on: windows-latest
+    needs: [meta, build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: portable-exe-x64
+          path: installer/src
+
+      - name: Prepare installer source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $src = Resolve-Path "installer/src"
+          Move-Item -Force "$src/DesktopIconToggle.exe" `
+            "$src/DesktopIconToggle-win_x64-Portable.exe"
+          Get-ChildItem $src | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,2)}}
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $dir = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6'
+          if (-not (Test-Path (Join-Path $dir 'ISCC.exe'))) {
+            throw "ISCC.exe not found in '$dir'"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $src = Resolve-Path "installer/src"
+          $out = Join-Path $PWD 'artifacts'
+          & iscc.exe "installer/installer.iss" `
+            "/DMyAppVersion=${{ needs.meta.outputs.version }}" `
+            "/DMyAppSourceDir=$src" `
+            "/O$out"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path "$out/DesktopIconToggle-Setup.exe")) {
+            throw "DesktopIconToggle-Setup.exe was not produced in $out"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DesktopIconToggle-Setup
+          path: artifacts/DesktopIconToggle-Setup.exe
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Collect everything and publish the GitHub Release
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: [meta, build, installer]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: DesktopIconToggle-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum DesktopIconToggle-x64.zip DesktopIconToggle-arm64.zip DesktopIconToggle-Setup.exe > SHA256SUMS.txt
+          ls -la
+          cat SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          name: DesktopIconToggle ${{ needs.meta.outputs.version }}
+          prerelease: ${{ needs.meta.outputs.prerelease }}
+          generate_release_notes: true
+          files: |
+            dist/DesktopIconToggle-x64.zip
+            dist/DesktopIconToggle-arm64.zip
+            dist/DesktopIconToggle-Setup.exe
+            dist/SHA256SUMS.txt
+          body: |
+            ## Downloads
+
+            | File | What it is |
+            | --- | --- |
+            | `DesktopIconToggle-Setup.exe` | Installer (x64). Sets up a Start Menu shortcut and starts with Windows. No .NET runtime required. |
+            | `DesktopIconToggle-x64.zip` | Portable zips for 64-bit Windows. |
+            | `DesktopIconToggle-arm64.zip` | Portable zips for ARM64 Windows. |
+
+            Each zip contains two builds:
+
+            - `DesktopIconToggle-win_x64.exe` / `DesktopIconToggle-win_arm64.exe` — **STANDARD**, needs the [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0).
+            - `DesktopIconToggle-win_x64-Portable.exe` / `DesktopIconToggle-win_arm64-Portable.exe` — **PORTABLE**, self-contained, no dependencies.
+
+            `SHA256SUMS.txt` lists the checksum of every file above.
