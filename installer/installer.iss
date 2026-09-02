@@ -53,7 +53,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 
 ; Ask the user to close a running instance before (un)installing it.
 AppMutex={#MyAppMutex}
-CloseApplications=auto
+; CloseApplications only accepts yes/no (unlike DisableDirPage, "auto" is invalid here).
+CloseApplications=yes
 RestartApplications=no
 
 SetupIconFile=..\active.ico
