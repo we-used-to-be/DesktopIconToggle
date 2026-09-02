@@ -12,6 +12,11 @@
     <PublishTrimmed>false</PublishTrimmed>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
 
+    <!-- Generate a NuGet lock file so the GitHub Actions NuGet cache (setup-dotnet cache:true)
+         can key on it. Without this file the cache step fails with
+         "Dependencies lock file is not found ... Supported file patterns: packages.lock.json". -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+
     <ApplicationManifest>app.manifest</ApplicationManifest>
 
     <ApplicationIcon>active.ico</ApplicationIcon>
