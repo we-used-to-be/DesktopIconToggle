@@ -3,11 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+*'
+      - 'v\.[0-9]+\.[0-9]+\.[0-9]+*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Version tag to build and publish (e.g. v2.1.0)'
+        description: 'Version tag to build and publish (e.g. v.2.1.1)'
         required: true
         type: string
 
@@ -46,6 +46,9 @@ jobs:
             raw="$GITHUB_REF_NAME"
           fi
           version="${raw#v}"
+          # Repository tags use the "v.X.Y.Z" form (a dot after the "v"),
+          # so strip a leading dot if present.
+          version="${version#.}"
 
           core=$(printf '%s' "$version" | grep -Eo '^[0-9]+\.[0-9]+\.[0-9]+' || true)
           if [ -z "$core" ]; then
